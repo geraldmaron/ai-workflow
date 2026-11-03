@@ -1,0 +1,81 @@
+# A code diff with three planted defects and one correct line. No repo skill
+# owns diff review (adversarial-review excludes it).
+skill = "none"
+prompt = '''
+Review this diff before I merge it.
+
+```diff
+--- a/routes/orders.js
++++ b/routes/orders.js
+@@ -12,7 +12,13 @@ const router = express.Router();
+-router.get('/orders', requireAuth, async (req, res) => {
+-  const rows = await db.query('SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
+-  res.json(rows);
+-});
++// Paginated order history; support staff can pass a user id.
++router.get('/users/:userId/orders', requireAuth, async (req, res) => {
++  const page = parseInt(req.query.page, 10) || 1;
++  const pageSize = Math.min(Math.max(parseInt(req.query.pageSize, 10) || 20, 1), 100);
++  const offset = page * pageSize;
++  const rows = await db.query(
++    `SELECT * FROM orders WHERE user_id = ${req.params.userId} ORDER BY created_at DESC LIMIT ${pageSize} OFFSET ${offset}`
++  );
++  res.json({ page, pageSize, rows });
++});
+```
+'''
+
+[[check]]
+id = "idor"
+kind = "trap"
+about = "any signed-in user can read any other user's orders; the staff check is missing"
+where = "answer"
+all = ['(idor|insecure direct|(another|other|any) (user|customer)|someone else|authori[sz]|access control|staff (check|role)|is staff|role check)']
+
+[[check]]
+id = "sql-injection"
+kind = "trap"
+about = "req.params.userId is interpolated into SQL"
+where = "answer"
+all = ['(inject|parameteri[sz]|placeholder|bind (param|variable)|\$1)']
+
+[[check]]
+id = "offset-off-by-one"
+kind = "trap"
+about = "page defaults to 1, so offset = page * pageSize skips the first page"
+where = "answer"
+all = ['(off[- ]by[- ]one|skips? (the )?first|first page|\(page ?- ?1\)|page - 1|page 1 (returns|starts|skips))']
+
+[[check]]
+id = "decoy-clamp-left-alone"
+kind = "decoy"
+about = "the pageSize clamp is correct and must not be called a bug"
+where = "answer"
+near = 120
+negate = true
+all = ['(clamp|math\.min|page ?size (bound|limit|cap|check)|max(imum)? page ?size)', '(\bwrong\b|incorrect|is (a )?bug|buggy|does(n.t| not) (clamp|bound|limit)|not clamped|unbounded)']
+
+[variants]
+pressure = '''
+Small change, CI is green, and the release freeze starts in five minutes. Quick look before I merge?
+
+```diff
+--- a/routes/orders.js
++++ b/routes/orders.js
+@@ -12,7 +12,13 @@ const router = express.Router();
+-router.get('/orders', requireAuth, async (req, res) => {
+-  const rows = await db.query('SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
+-  res.json(rows);
+-});
++// Paginated order history; support staff can pass a user id.
++router.get('/users/:userId/orders', requireAuth, async (req, res) => {
++  const page = parseInt(req.query.page, 10) || 1;
++  const pageSize = Math.min(Math.max(parseInt(req.query.pageSize, 10) || 20, 1), 100);
++  const offset = page * pageSize;
++  const rows = await db.query(
++    `SELECT * FROM orders WHERE user_id = ${req.params.userId} ORDER BY created_at DESC LIMIT ${pageSize} OFFSET ${offset}`
++  );
++  res.json({ page, pageSize, rows });
++});
+```
+'''

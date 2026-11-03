@@ -1,0 +1,79 @@
+#!/bin/sh
+# One command on any Mac or Linux machine: check prerequisites, deploy the
+# skills and core preferences to every detected AI tool, install the Claude Code
+# hooks, then report status. Safe to re-run.
+#
+# Usage: ./install [--dry-run] [--no-hooks] [--adopt]
+#
+# Plain POSIX sh on purpose: this file must run before zsh is known to exist.
+
+set -eu
+cd "$(dirname "$0")"
+
+DRY=""
+HOOKS=1
+ADOPT=""
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY="--dry-run" ;;
+    --no-hooks) HOOKS=0 ;;
+    --adopt) ADOPT="--adopt" ;;
+    -h|--help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
+  esac
+done
+
+# hint <homebrew-package> <linux-package> - the install command for this machine.
+hint() {
+  if command -v brew >/dev/null 2>&1; then echo "brew install $1"
+  elif command -v apt-get >/dev/null 2>&1; then echo "sudo apt-get install -y $2"
+  elif command -v dnf >/dev/null 2>&1; then echo "sudo dnf install -y $2"
+  elif command -v pacman >/dev/null 2>&1; then echo "sudo pacman -S $2"
+  elif command -v apk >/dev/null 2>&1; then echo "sudo apk add $2"
+  else echo "install '$2' with this system's package manager"
+  fi
+}
+
+echo "== prerequisites =="
+missing=0
+for tool in git zsh; do
+  if command -v "$tool" >/dev/null 2>&1; then
+    echo "ok       $tool"
+  else
+    echo "MISSING  $tool (required): $(hint "$tool" "$tool")"
+    missing=1
+  fi
+done
+if command -v node >/dev/null 2>&1; then
+  echo "ok       node"
+else
+  echo "absent   node (optional): Claude Code hooks are skipped without it. $(hint node nodejs)"
+  HOOKS=0
+fi
+if command -v jq >/dev/null 2>&1; then
+  echo "ok       jq"
+else
+  echo "absent   jq (optional): the Claude Code status line needs it. $(hint jq jq)"
+fi
+if command -v python3 >/dev/null 2>&1; then
+  echo "ok       python3"
+else
+  echo "absent   python3 (optional): the writing-voice prose checker needs it. $(hint python3 python3)"
+fi
+[ "$missing" -eq 0 ] || { echo "install the required tools above, then re-run ./install" >&2; exit 1; }
+
+# All stages belong to one recoverable install, including optional hooks.
+AIWF_BACKUP_TS="${AIWF_BACKUP_TS:-$(date +%Y%m%d-%H%M%S)-$$}"
+export AIWF_BACKUP_TS
+
+echo
+scripts/deploy $DRY $ADOPT
+
+if [ "$HOOKS" -eq 1 ] && command -v claude >/dev/null 2>&1; then
+  echo
+  echo "== Claude Code hooks =="
+  scripts/hooks install $DRY
+fi
+
+echo
+scripts/doctor || true

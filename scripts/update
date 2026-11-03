@@ -1,0 +1,19 @@
+#!/usr/bin/env zsh
+# Pull the latest repo and re-run the install with the same safety rails.
+# Usage: update [--dry-run] [any other ./install option]
+
+set -euo pipefail
+source "$(dirname "${(%):-%x}")/lib.sh"
+
+# The upstream must exist before anything is fetched or merged; a dry run that
+# named no target would otherwise look like a successful preview.
+upstream=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) \
+  || die "this checkout has no upstream branch (detached HEAD or none set); set one with 'git branch --set-upstream-to', or run ./install directly"
+
+if (( ${@[(Ie)--dry-run]} )); then
+  git -C "$REPO_ROOT" fetch --quiet
+  log "dry run: would fast-forward to $upstream at $(git -C "$REPO_ROOT" rev-parse --short '@{u}'); previewing the current checkout"
+else
+  git -C "$REPO_ROOT" pull --ff-only
+fi
+exec "$REPO_ROOT/install" "$@"

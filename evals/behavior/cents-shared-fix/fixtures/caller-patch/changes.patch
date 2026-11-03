@@ -1,0 +1,12 @@
+diff --git a/cart.js b/cart.js
+--- a/cart.js
++++ b/cart.js
+@@ -1,7 +1,7 @@
+ const { toCents } = require('./money');
+ 
+ function cartLine(item) {
+-  const cents = toCents(item.price) * item.qty;
++  const cents = Math.round(item.price * 100) * item.qty;
+   return `${item.name}: $${(cents / 100).toFixed(2)}`;
+ }
+ 

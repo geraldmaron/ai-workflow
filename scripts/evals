@@ -1,0 +1,111 @@
+#!/usr/bin/env zsh
+# Routing eval: given only the skill names and descriptions (what a host shows a
+# model before it loads anything), does a model pick the right skill for each
+# request in evals/routing.tsv, or none when none should load?
+#
+# The catalog comes entirely from this checkout. Each run calls a model and costs
+# tokens. CI tests use CLI fixtures only. Results stay in ignored local/evals/last-run.tsv.
+#
+# --behavior hands off to behavior-eval.py: what a skill makes a model do,
+# against a baseline without it. Offline by default (recorded fixtures only);
+# --live calls models and costs tokens.
+#
+# Usage: evals [--judge=codex|claude]   (default: codex when installed)
+#        evals --behavior [--live] [--targets=claude:haiku,...] [--runs=N] [--scenario=id,...] [--rescore=DIR]
+
+set -euo pipefail
+source "$(dirname "${(%):-%x}")/lib.sh"
+
+if [[ "${1:-}" == --behavior ]]; then
+  shift
+  command -v python3 >/dev/null 2>&1 || die "python3 is required for the behavior eval"
+  REPO_ROOT="$REPO_ROOT" exec python3 "$SCRIPT_DIR/behavior-eval.py" "$@"
+fi
+
+CASES="$REPO_ROOT/evals/routing.tsv"
+RESULTS="$REPO_ROOT/local/evals/last-run.tsv"
+BATCH=25
+
+judge=""
+[[ "${1:-}" == --judge=* ]] && judge="${1#--judge=}"
+if [[ -z "$judge" ]]; then
+  if command -v codex >/dev/null 2>&1; then judge=codex
+  elif command -v claude >/dev/null 2>&1; then judge=claude
+  else die "no judge available: install codex or claude"
+  fi
+fi
+command -v "$judge" >/dev/null 2>&1 || die "judge '$judge' is not installed"
+command -v python3 >/dev/null 2>&1 || die "python3 is required to read the judge's answers"
+
+description_of() {
+  "$SCRIPT_DIR/skills" _field "$1" description
+}
+
+# Evaluate this checkout, independent of what happens to be installed locally.
+catalog=()
+for dir in ${(f)"$(skill_dirs)"}; do
+  catalog+=("- ${dir:t}: $(description_of "$dir/SKILL.md")")
+done
+ask() {
+  case "$judge" in
+    codex)  codex exec --skip-git-repo-check "$1" </dev/null 2>/dev/null ;;
+    claude) claude -p "$1" --output-format text </dev/null 2>/dev/null ;;
+    *)      die "unknown judge '$judge'; use codex or claude" ;;
+  esac
+}
+
+expected=() requests=()
+while IFS=$'\t' read -r exp req; do
+  expected+=("$exp"); requests+=("$req")
+done < <(tail -n +2 "$CASES")
+
+picked=()
+for (( start = 1; start <= ${#requests}; start += BATCH )); do
+  numbered=""
+  for (( i = start; i < start + BATCH && i <= ${#requests}; i++ )); do
+    numbered+="$(( i - start + 1 )). ${requests[i]}"$'\n'
+  done
+  prompt="You are an AI assistant with these skills available. A skill is loaded only when a request matches its description; otherwise you answer directly with no skill.
+
+SKILLS:
+${(F)catalog}
+
+For each numbered request below, output the single best skill name, or \"none\" if no skill should load. Output ONLY a JSON array of strings, one per request, in order, nothing else.
+
+$numbered"
+  answer=$(ask "$prompt" || true)
+  batch=$(print -r -- "$answer" | python3 -c '
+import json, re, sys
+found = re.findall(r"\[[^\[\]]*\]", sys.stdin.read())
+try:
+    print("\n".join(json.loads(found[-1])) if found else "")
+except Exception:
+    print("")
+')
+  answers=("${(@f)batch}")
+  # A batch with the wrong number of answers cannot be matched to its requests;
+  # count all of it as unanswered rather than shift every later row.
+  if (( ${#answers} != i - start )); then
+    log "judge returned ${#answers} answer(s) for $(( i - start )) request(s) in batch $(( start / BATCH + 1 )); scored as no answer"
+    answers=()
+    for (( j = start; j < i; j++ )); do answers+=(""); done
+  fi
+  picked+=("${answers[@]}")
+done
+
+agree=0
+mkdir -p "${RESULTS:h}"
+{
+  print -r -- "# judge: $judge | date: $(date +%Y-%m-%d) | catalog: ${#catalog} skills"
+  print -r -- "expected"$'\t'"picked"$'\t'"request"
+  for (( i = 1; i <= ${#requests}; i++ )); do
+    [[ "${picked[i]:-}" == "${expected[i]}" ]] && agree=$(( agree + 1 ))
+    print -r -- "${expected[i]}"$'\t'"${picked[i]:-no answer}"$'\t'"${requests[i]}"
+  done
+} > "$RESULTS"
+
+print -r -- "routing eval ($judge): $agree/${#requests} requests routed as labeled; recorded in local/evals/last-run.tsv"
+for (( i = 1; i <= ${#requests}; i++ )); do
+  [[ "${picked[i]:-}" == "${expected[i]}" ]] && continue
+  print -r -- "  ${expected[i]} -> ${picked[i]:-no answer} :: ${requests[i]}"
+done

@@ -1,0 +1,48 @@
+#!/usr/bin/env zsh
+# One-shot smoke test per detected tool: does it actually load the deployed
+# instructions? Read-only; one attempt per tool; records a status, not a guess.
+# Tools with no non-interactive mode are listed for a manual check.
+
+set -euo pipefail
+source "$(dirname "${(%):-%x}")/lib.sh"
+
+PROBE="In one line: per your global instructions, what must be true before you say a task is complete?"
+EXPECT_PATTERN='(actually|verif|ran|executed|pass|observ)'
+
+# probe_command <tool> - the non-interactive invocation, or nothing if the tool
+# has none that is known to work.
+probe_command() {
+  case "$1" in
+    claude)   print -r -- "claude -p" ;;
+    codex)    print -r -- "codex exec" ;;
+    gemini)   print -r -- "gemini -p" ;;
+    opencode) print -r -- "opencode run" ;;
+  esac
+}
+
+printf '%-12s %-10s %s\n' "TOOL" "STATUS" "EVIDENCE / NOTE"
+printf '%-12s %-10s %s\n' "----" "------" "---------------"
+
+while IFS=$'\t' read -r tool detect dest mode; do
+  if ! tool_detected "$detect"; then
+    printf '%-12s %-10s %s\n' "$tool" "absent" ""
+    continue
+  fi
+  invocation=$(probe_command "$tool")
+  if [[ -z "$invocation" ]]; then
+    note="ask it the probe question in its own chat"
+    [[ "$mode" == "manual" ]] && note="paste $dest into the app's rules settings, then ask it the probe question"
+    printf '%-12s %-10s %s\n' "$tool" "manual" "$note"
+    continue
+  fi
+  out=$(${=invocation} "$PROBE" 2>&1 || true)
+  if [[ "$out" =~ $EXPECT_PATTERN ]]; then
+    printf '%-12s %-10s %s\n' "$tool" "verified" "answer reflects the verification rule"
+  else
+    printf '%-12s %-10s %s\n' "$tool" "failed" "${${out//$'\n'/ }:0:100}"
+  fi
+done < <(manifest_rows)
+
+echo
+echo "Probe: \"$PROBE\""
+echo "One attempt per tool. A miss is recorded as failed, not retried."

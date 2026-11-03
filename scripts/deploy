@@ -1,0 +1,165 @@
+#!/usr/bin/env zsh
+# Lint the skills library, deploy it to every detected tool's skill root, and
+# sync core/GLOBAL.md into every detected tool. Run by ./install and
+# scripts/update; safe to run on its own at any time.
+# Usage: deploy [--dry-run] [--adopt]
+
+set -euo pipefail
+source "$(dirname "${(%):-%x}")/lib.sh"
+
+DRY_RUN=0
+ADOPT=0
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=1 ;;
+    --adopt) ADOPT=1 ;;
+    *) die "usage: deploy [--dry-run] [--adopt]" ;;
+  esac
+done
+
+log "== ai-workflow deploy =="
+log "repo: $REPO_ROOT"
+
+# prune_managed <root> <label> <keep-repo-skills: 1|0> - remove skills this repo
+# deployed to root. With keep=1, only those the repo no longer defines (a skill
+# deleted or renamed must stop firing); with keep=0, all of them (a root the
+# manifest dropped). Skills from another source have no marker and stay.
+prune_managed() {
+  local root="$1" label="$2" keep="$3" existing name
+  [[ -d "$root" ]] || return 0
+  for existing in "$root"/*/(N); do
+    name=$(basename "${existing%/}")
+    (( keep )) && [[ -d "$REPO_ROOT/skills/$name" ]] && continue
+    managed_skill "${existing%/}" || continue
+    if (( DRY_RUN )); then
+      log "would prune skill '$name' from $root ($label)"
+      continue
+    fi
+    backup_path "${existing%/}"
+    rm -rf "${existing%/}"
+    log "pruned skill '$name' from $root ($label)"
+  done
+}
+
+deploy_skills() {
+  local dest_root="$1" label="$2"
+  local dest_expanded skill_dir name target changed=0 unchanged=0
+  dest_expanded=$(expand_path "$dest_root")
+
+  # Safety rail: everything below removes directories, so refuse to operate on
+  # anything that isn't an explicitly-named skills root.
+  [[ "$dest_expanded" == */skills ]] || die "refusing to deploy skills to '$dest_expanded' (must end in /skills)"
+
+  # Staging left by an interrupted earlier run: never a usable skill.
+  if (( DRY_RUN )); then
+    for target in "$dest_expanded"/.aiwf-staging.*(N); do log "would remove leftover $target"; done
+  else
+    rm -rf "$dest_expanded"/.aiwf-staging.*(N)
+  fi
+
+  for skill_dir in "$REPO_ROOT"/skills/*/(N); do
+    name=$(basename "${skill_dir%/}")
+    target="$dest_expanded/$name"
+    # An identical copy needs no write and no backup, so a re-run with nothing
+    # new leaves no snapshot and rollback still means "undo the last change".
+    if skill_in_sync "${skill_dir%/}" "$target"; then
+      unchanged=$(( unchanged + 1 ))
+      continue
+    fi
+    changed=$(( changed + 1 ))
+    (( DRY_RUN )) && continue
+    mkdir -p "$dest_expanded"
+    # Build the complete copy, marker included, beside the target and swap it
+    # in only once it is whole. A failed or interrupted copy then leaves the
+    # old skill in place, never a half copy without a marker that the next run
+    # would mistake for someone else's skill.
+    staging=$(mktemp -d "$dest_expanded/.aiwf-staging.XXXXXX")
+    # Copy the whole directory, not just SKILL.md: a skill may carry
+    # references/, scripts/, or templates that it loads on demand.
+    if ! cp -Rp "${skill_dir%/}/." "$staging/"; then
+      rm -rf "$staging"
+      die "could not copy skill '$name' to $dest_expanded; that skill was left as it was"
+    fi
+    # Provenance marker: prune only ever removes directories this repo deployed.
+    # Skills placed here by anything else (another installer or by hand)
+    # are foreign and must survive untouched.
+    print -r -- "$MANAGED_MARKER" > "$staging/.managed-by"
+    chmod "$(printf '%o' $(( 8#777 & ~8#$(umask) )))" "$staging"
+    backup_path "$target"
+    rm -rf "$target"
+    mv "$staging" "$target"
+  done
+  if (( DRY_RUN )); then
+    log "would deploy $changed skill(s), $unchanged unchanged -> $dest_expanded ($label)"
+  else
+    log "deployed $changed skill(s), $unchanged unchanged -> $dest_expanded ($label)"
+    record_skill_root "$dest_expanded"
+  fi
+
+  prune_managed "$dest_expanded" "$label" 1
+}
+
+log ""
+log "-- skills lint --"
+if ! "$SCRIPT_DIR/skills" lint; then
+  die "skills lint failed; fix the errors above before deploying (nothing was written)"
+fi
+
+# Check every destination before writing any of them, and report every
+# collision at once. Adoption is explicit and backed up, so an existing skill
+# never silently changes owners.
+collisions=()
+while IFS=$'\t' read -r label detect root; do
+  tool_detected "$detect" || continue
+  expanded=$(expand_path "$root")
+  [[ "$expanded" == */skills ]] || die "refusing to deploy skills to '$expanded' (must end in /skills)"
+  for dir in "${(@f)$(skill_dirs)}"; do
+    target="$expanded/${dir:t}"
+    [[ -e "$target" || -L "$target" ]] || continue
+    managed_skill "$target" && continue
+    collisions+=("$target ($label)")
+  done
+done < <(skill_dest_rows)
+if (( ${#collisions} )); then
+  if (( ! ADOPT )); then
+    log ""
+    log "These skill folders have the same name as a repo skill but were not installed by this repo:"
+    for c in "${collisions[@]}"; do log "  $c"; done
+    log ""
+    log "Review them. To back them up and replace them with this repo's versions:"
+    log "  ./install --dry-run --adopt"
+    log "  ./install --adopt"
+    die "${#collisions} skill collision(s); nothing was written"
+  fi
+  for c in "${collisions[@]}"; do
+    if (( DRY_RUN )); then log "would adopt $c; existing content will be backed up"
+    else log "adopt $c; existing content will be backed up"; fi
+  done
+fi
+
+log ""
+log "-- skills --"
+while IFS=$'\t' read -r label detect root; do
+  if ! tool_detected "$detect"; then
+    log "skip $label (not detected) -> $root"
+    continue
+  fi
+  deploy_skills "$root" "$label"
+done < <(skill_dest_rows)
+
+# A root this checkout deployed to that the manifest has since dropped.
+for root in "${(@f)$(retired_skill_roots)}"; do
+  [[ -n "$root" ]] || continue
+  prune_managed "$root" "retired root" 0
+  (( DRY_RUN )) && continue
+  rmdir "$root" 2>/dev/null && log "removed empty $root" || true
+  forget_skill_root "$root"
+done
+
+log ""
+log "-- core sync --"
+if (( DRY_RUN )); then
+  "$SCRIPT_DIR/sync" --dry-run
+else
+  "$SCRIPT_DIR/sync"
+fi

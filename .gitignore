@@ -1,0 +1,7 @@
+# Machine overrides, backups, evaluation output, and private working notes.
+local/
+*.local.*
+.env*
+*.bak
+*.bak-*
+.DS_Store

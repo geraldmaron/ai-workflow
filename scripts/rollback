@@ -1,0 +1,58 @@
+#!/usr/bin/env zsh
+# Put every path a run touched back the way it was before that run.
+# Usage: rollback [--dry-run] [snapshot]   (snapshot: a directory under local/backups/,
+#                                          default: the most recent one)
+#
+# The rollback is itself backed up as a new snapshot, so running rollback again
+# undoes it.
+
+set -euo pipefail
+source "$(dirname "${(%):-%x}")/lib.sh"
+
+DRY_RUN=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=1
+  shift
+fi
+
+[[ -d "$BACKUP_DIR" ]] || die "no backups found in $BACKUP_DIR"
+# Numeric sort, so a run id ending in pid 10 sorts after one ending in pid 9.
+snapshots=("$BACKUP_DIR"/*(N/n))
+(( ${#snapshots} )) || die "no backups found in $BACKUP_DIR"
+
+ts="${1:-${snapshots[-1]:t}}"
+snapshot_dir="$BACKUP_DIR/$ts"
+index="$snapshot_dir/index.tsv"
+[[ -d "$snapshot_dir" ]] || die "no backup snapshot at $snapshot_dir"
+[[ -f "$index" ]] || die "$snapshot_dir has no index.tsv, so the original paths are unknown; restore from it by hand"
+
+# Never restore into the snapshot this rollback is writing its own backups to.
+[[ "$ts" != "$AIWF_BACKUP_TS" ]] || die "refusing to roll back the running snapshot"
+
+log "restoring from $snapshot_dir"
+while IFS=$'\t' read -r saved original; do
+  [[ -n "$original" ]] || continue
+  if [[ "$saved" == "-" ]]; then
+    if [[ -e "$original" || -L "$original" ]]; then
+      if (( DRY_RUN )); then
+        log "would remove $original (created by that run)"
+      else
+        backup_path "$original"
+        rm -rf "$original"
+        log "removed $original (created by that run)"
+      fi
+    fi
+    continue
+  fi
+  if (( DRY_RUN )); then
+    log "would restore $original"
+    continue
+  fi
+  backup_path "$original"
+  rm -rf "$original"
+  mkdir -p "${original:h}"
+  cp -Rp "$snapshot_dir/$saved" "$original"
+  log "restored $original"
+done < "$index"
+
+log "rollback complete. Run 'scripts/doctor' to confirm current state."

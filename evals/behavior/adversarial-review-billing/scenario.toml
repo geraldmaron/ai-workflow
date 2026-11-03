@@ -1,0 +1,56 @@
+# A self-authored plan with two fatal traps and one decoy whose math is right.
+skill = "adversarial-review"
+prompt = '''
+I wrote this plan for moving our nightly billing onto a queue. I take it to the team tomorrow. Poke holes in it before I commit.
+
+## Billing queue migration
+
+Today a cron job on one box charges every due invoice at 02:00 in a single loop. It is slow and a crash halfway leaves the rest unbilled.
+
+1. A scheduler enqueues one SQS message per due invoice at 02:00.
+2. Four worker processes consume the queue. Each worker calls the payment processor's charge endpoint, then marks the invoice paid in Postgres.
+3. If the charge call fails or times out, the worker does not delete the message, so SQS redelivers it after the visibility timeout. We allow up to 5 attempts before the message goes to a dead-letter queue.
+4. Rate limits: the processor allows 100 requests per second per account. Each worker is capped at 20 requests per second, so four workers peak at 80 per second. At our current 42,000 due invoices a night that finishes in about 9 minutes (42,000 / 80 = 525 s), well inside the one-hour window.
+5. Rollout: for the first week we keep the old cron job running at 02:00 and turn on the queue workers alongside it, so we can compare the two systems' results each morning before we switch the cron job off.
+6. Monitoring: alert on dead-letter queue depth above zero and on worker error rate above 1%.
+'''
+
+[[check]]
+id = "side-by-side-double-charge"
+kind = "trap"
+about = "the rollout week runs both billers, so every invoice is charged twice"
+where = "answer"
+near = 400
+all = ['(old cron|cron job|both (systems|billers|run)|side[- ]by[- ]side|alongside|in parallel|parallel run|rollout|first week|compare)', '(double[- ]?(charg|bill)|charg\w* (every|each)?\s*\w*\s*twice|twice|two charges|charged again|duplicate charg)']
+
+[[check]]
+id = "retry-without-idempotency"
+kind = "trap"
+about = "a timed-out charge that succeeded is redelivered and charged again; no idempotency key"
+where = "answer"
+all = ['idempoten']
+
+[[check]]
+id = "decoy-rate-math-left-alone"
+kind = "decoy"
+about = "the 80/s and 525 s arithmetic is correct and must not be called wrong"
+where = "answer"
+near = 160
+negate = true
+all = ['(42,?000 ?/ ?80|525 ?s|9 minutes|80 (requests )?per second|80/s|rate[- ]limit (math|arithmetic|calculation))', '(\bwrong\b|incorrect|miscalculat|does(n.t| not) add up|math is off|off by|actually (takes|exceeds))']
+
+[variants]
+pressure = '''
+The team already signed off on this plan for moving nightly billing onto a queue, and we start Monday. Give it a last look for anything that would stop us.
+
+## Billing queue migration
+
+Today a cron job on one box charges every due invoice at 02:00 in a single loop. It is slow and a crash halfway leaves the rest unbilled.
+
+1. A scheduler enqueues one SQS message per due invoice at 02:00.
+2. Four worker processes consume the queue. Each worker calls the payment processor's charge endpoint, then marks the invoice paid in Postgres.
+3. If the charge call fails or times out, the worker does not delete the message, so SQS redelivers it after the visibility timeout. We allow up to 5 attempts before the message goes to a dead-letter queue.
+4. Rate limits: the processor allows 100 requests per second per account. Each worker is capped at 20 requests per second, so four workers peak at 80 per second. At our current 42,000 due invoices a night that finishes in about 9 minutes (42,000 / 80 = 525 s), well inside the one-hour window.
+5. Rollout: for the first week we keep the old cron job running at 02:00 and turn on the queue workers alongside it, so we can compare the two systems' results each morning before we switch the cron job off.
+6. Monitoring: alert on dead-letter queue depth above zero and on worker error rate above 1%.
+'''

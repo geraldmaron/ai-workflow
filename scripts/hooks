@@ -1,0 +1,231 @@
+#!/usr/bin/env zsh
+# Claude Code hooks and status line: install, remove, and verify.
+#
+# settings.json belongs to the app, so this script never owns the whole file.
+# install and uninstall touch only the hook entries and status line that point
+# at scripts this repo ships; every other key and every other hook survives.
+# check reports any configured hook whose script is missing.
+#
+# Usage: hooks check | install [--dry-run] | uninstall [--dry-run]
+
+set -euo pipefail
+source "$(dirname "${(%):-%x}")/lib.sh"
+
+SRC="$REPO_ROOT/extras/claude/hooks"
+STATUSLINE_SRC="$REPO_ROOT/extras/claude/statusline-command.sh"
+CLAUDE_HOME="$HOME/.claude"
+DEST="$CLAUDE_HOME/hooks"
+STATUSLINE_DEST="$CLAUDE_HOME/statusline-command.sh"
+SETTINGS="$CLAUDE_HOME/settings.json"
+
+# The hook wiring this repo owns. HOOKS is replaced with the install directory.
+hook_spec() {
+  cat <<'JSON'
+{
+  "PreToolUse": [
+    { "matcher": "Bash",
+      "hooks": [{ "type": "command", "command": "node \"HOOKS/block-no-verify.mjs\"", "timeout": 5 }] }
+  ],
+  "PostToolUse": [
+    { "matcher": "Write|Edit|MultiEdit",
+      "hooks": [{ "type": "command", "command": "node \"HOOKS/validate-written-file.mjs\"", "timeout": 5 }] },
+    { "matcher": "Write|Edit|MultiEdit",
+      "hooks": [{ "type": "command", "command": "node \"HOOKS/scan-secrets.mjs\"", "timeout": 10 }] },
+    { "matcher": "Write|Edit|MultiEdit",
+      "hooks": [{ "type": "command", "command": "node \"HOOKS/skill-duplication-guard.mjs\"", "timeout": 5 }] }
+  ],
+  "UserPromptSubmit": [
+    { "hooks": [{ "type": "command", "command": "node \"HOOKS/session-cost-guard.mjs\"", "timeout": 5 }] }
+  ]
+}
+JSON
+}
+
+# plan_settings <install|uninstall> - compute settings.json with this repo's
+# entries merged or removed, into $SETTINGS_PLAN. Dies, writing nothing, if the
+# existing file is not a JSON object whose hooks are event arrays: guessing at
+# a shape Claude Code would also reject is how hooks end up silently unwired.
+# An entry is ours only when every command in it is exactly one this repo
+# writes; a user's wrapper or edit around our script is theirs and stays.
+SETTINGS_PLAN=""
+plan_settings() {
+  local mode="$1" spec_file
+  spec_file=$(mktemp)
+  SETTINGS_PLAN=$(mktemp)
+  hook_spec | sed "s|HOOKS|$DEST|g" > "$spec_file"
+  node - "$mode" "$SETTINGS" "$SETTINGS_PLAN" "$spec_file" "$STATUSLINE_DEST" <<'NODE' || { rm -f "$spec_file" "$SETTINGS_PLAN"; die "$SETTINGS was left unchanged; fix it, then re-run" }
+const fs = require("fs");
+const [mode, settingsPath, outPath, specPath, statusline] = process.argv.slice(2);
+const fail = (why) => { console.error(`error: ${settingsPath}: ${why}`); process.exit(1); };
+const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+let settings = {};
+if (fs.existsSync(settingsPath)) {
+  const text = fs.readFileSync(settingsPath, "utf8");
+  if (text.trim()) {
+    try { settings = JSON.parse(text); } catch (e) { fail(`not valid JSON (${e.message})`); }
+  }
+}
+if (!isObj(settings)) fail("top level is not a JSON object");
+if (settings.hooks != null && !isObj(settings.hooks)) fail('"hooks" is not an object');
+const hooks = settings.hooks ?? {};
+for (const [event, entries] of Object.entries(hooks)) {
+  if (entries != null && !Array.isArray(entries)) fail(`hooks.${event} is not an array`);
+  if ((entries ?? []).some((e) => !isObj(e))) fail(`hooks.${event} has an entry that is not an object`);
+}
+const spec = JSON.parse(fs.readFileSync(specPath, "utf8"));
+const ownCommands = new Set(Object.values(spec).flat().flatMap((e) => e.hooks.map((h) => h.command)));
+const ours = (entry) => Array.isArray(entry.hooks) && entry.hooks.length > 0
+  && entry.hooks.every((h) => isObj(h) && ownCommands.has(h.command));
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+for (const event of new Set([...Object.keys(hooks), ...Object.keys(spec)])) {
+  const current = hooks[event] ?? [];
+  const want = mode === "install" ? (spec[event] ?? []) : [];
+  // Already exactly right: leave the event alone, order included, so a re-run
+  // never rewrites the file just because a user hook was added after ours.
+  if (same(current.filter(ours), want)) continue;
+  hooks[event] = [...current.filter((e) => !ours(e)), ...want];
+  if (!hooks[event].length) delete hooks[event];
+}
+const ourStatus = `bash "${statusline}"`;
+const statusOurs = settings.statusLine?.command === ourStatus;
+if (mode === "install") {
+  if (!settings.statusLine || statusOurs) {
+    settings.statusLine = { type: "command", command: ourStatus };
+  } else {
+    console.error("kept the existing statusLine (not this repo's); ours is installed but not wired");
+  }
+} else if (statusOurs) {
+  delete settings.statusLine;
+}
+if (Object.keys(hooks).length) settings.hooks = hooks;
+else delete settings.hooks;
+fs.writeFileSync(outPath, JSON.stringify(settings, null, 2) + "\n");
+NODE
+  rm -f "$spec_file"
+}
+
+# apply_settings <install|uninstall> - write the planned file if it differs.
+# Returns 0 when it wrote, 1 when settings.json was already right.
+apply_settings() {
+  local mode="$1"
+  if [[ -f "$SETTINGS" ]] && cmp -s "$SETTINGS_PLAN" "$SETTINGS"; then
+    rm -f "$SETTINGS_PLAN"
+    return 1
+  fi
+  backup_path "$SETTINGS" through
+  mkdir -p "${SETTINGS:h}"
+  # Write through the existing file (and any symlink to it) so its location
+  # and permissions stay as they were. Checked explicitly: this runs inside an
+  # if, where set -e does not apply.
+  cat "$SETTINGS_PLAN" > "$SETTINGS" || { rm -f "$SETTINGS_PLAN"; die "could not write $SETTINGS" }
+  rm -f "$SETTINGS_PLAN"
+  if [[ "$mode" == install ]]; then
+    log "merged this repo's hooks into $SETTINGS (other settings untouched)"
+  else
+    log "removed this repo's hooks from $SETTINGS (other settings untouched)"
+  fi
+}
+
+require_node() {
+  command -v node >/dev/null 2>&1 || die "node is not installed; Claude Code hooks need it (see ./install for the install command)"
+}
+
+cmd="${1:-check}"
+dry=0
+[[ "${2:-}" == "--dry-run" ]] && dry=1
+
+case "$cmd" in
+  check)
+    [[ -f "$SETTINGS" ]] || { print -r -- "no settings.json at $SETTINGS"; exit 0 }
+    command -v node >/dev/null 2>&1 || { print -r -- "node not found; cannot read hook wiring"; exit 0 }
+    node - "$SETTINGS" <<'NODE'
+const fs = require("fs");
+const settings = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const rows = [];
+for (const [event, entries] of Object.entries(settings.hooks ?? {}))
+  for (const entry of entries ?? [])
+    for (const h of entry.hooks ?? []) rows.push([event, h.command ?? ""]);
+if (settings.statusLine?.command) rows.push(["statusLine", settings.statusLine.command]);
+if (!rows.length) { console.log("no hooks configured"); process.exit(0); }
+let broken = 0;
+for (const [event, command] of rows) {
+  const m = command.match(/\/[^"\s]+\.(mjs|js|sh|py)/);
+  let status;
+  if (!m) status = "inline command, not checked";
+  else if (fs.existsSync(m[0])) status = "ok";
+  else { status = "MISSING FILE"; broken++; }
+  const label = m ? m[0].replace(process.env.HOME, "~") : command.slice(0, 40) + "...";
+  const mark = status === "ok" ? "ok     " : status === "MISSING FILE" ? "BROKEN " : "other  ";
+  console.log(`${mark} ${event.padEnd(17)} ${label}  ${status === "ok" ? "" : status}`);
+}
+if (broken) {
+  console.log(`\n${broken} hook(s) point at files that do not exist. Every matching tool call fails.`);
+  console.log("Fix: scripts/hooks install");
+  process.exit(1);
+}
+NODE
+    ;;
+
+  install)
+    [[ -d "$SRC" ]] || die "no hook sources at $SRC"
+    if (( dry )); then
+      for f in "$SRC"/*.mjs(N) "$STATUSLINE_SRC"; do
+        target="$DEST/${f:t}"
+        [[ "$f" == "$STATUSLINE_SRC" ]] && target="$STATUSLINE_DEST"
+        cmp -s "$f" "$target" || log "would install ${f:t} -> $target"
+      done
+      log "would merge this repo's hooks and status line into $SETTINGS if they differ (everything else preserved)"
+      exit 0
+    fi
+    require_node
+    # Validate and plan the settings merge first, so an unusable settings.json
+    # stops the install before any hook script is copied in unwired.
+    plan_settings install
+    mkdir -p "$DEST"
+    # Only changed files are backed up and written, so a re-run with nothing
+    # new leaves no snapshot.
+    installed=0
+    for f in "$SRC"/*.mjs(N) "$STATUSLINE_SRC"; do
+      target="$DEST/${f:t}"
+      [[ "$f" == "$STATUSLINE_SRC" ]] && target="$STATUSLINE_DEST"
+      cmp -s "$f" "$target" && continue
+      backup_path "$target"
+      cp "$f" "$target"
+      chmod +x "$target"
+      log "installed ${f:t} -> $target"
+      installed=1
+    done
+    if apply_settings install; then installed=1; fi
+    if (( installed )); then
+      log "done. Restart Claude Code, then run 'scripts/hooks check'"
+    else
+      log "hooks and status line already in place"
+    fi
+    ;;
+
+  uninstall)
+    if (( dry )); then
+      for f in "$SRC"/*.mjs(N); do [[ -f "$DEST/${f:t}" ]] && log "would remove $DEST/${f:t}"; done
+      [[ -f "$STATUSLINE_DEST" ]] && log "would remove $STATUSLINE_DEST"
+      [[ -f "$SETTINGS" ]] && log "would remove this repo's hooks and status line from $SETTINGS"
+      exit 0
+    fi
+    if [[ -f "$SETTINGS" ]]; then
+      require_node
+      plan_settings uninstall
+      apply_settings uninstall || true
+    fi
+    for f in "$SRC"/*.mjs(N) "$STATUSLINE_SRC"; do
+      target="$DEST/${f:t}"
+      [[ "$f" == "$STATUSLINE_SRC" ]] && target="$STATUSLINE_DEST"
+      [[ -f "$target" ]] || continue
+      backup_path "$target"
+      rm -f "$target"
+      log "removed $target"
+    done
+    ;;
+
+  *)
+    die "usage: hooks check | install [--dry-run] | uninstall [--dry-run]"
+    ;;
+esac

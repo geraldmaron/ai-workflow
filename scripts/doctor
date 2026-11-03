@@ -1,0 +1,137 @@
+#!/usr/bin/env zsh
+# Read-only health check: detection status + drift for every managed destination.
+# Never writes anything.
+
+set -euo pipefail
+source "$(dirname "${(%):-%x}")/lib.sh"
+
+core_content=$(render_core)
+needs_sync=0
+printf '%-12s %-11s %-45s %s\n' "TOOL" "DETECTED" "DESTINATION" "STATUS"
+printf '%-12s %-11s %-45s %s\n' "----" "--------" "-----------" "------"
+
+while IFS=$'\t' read -r tool detect dest mode; do
+  dest_expanded=$(expand_path "$dest")
+  if ! tool_detected "$detect"; then
+    printf '%-12s %-11s %-45s %s\n' "$tool" "no" "$dest" "tool-absent"
+    continue
+  fi
+
+  if [[ "$mode" == "manual" ]]; then
+    if [[ -f "$dest_expanded" ]] && diff -q <(print -r -- "$core_content") "$dest_expanded" >/dev/null 2>&1; then
+      printf '%-12s %-11s %-45s %s\n' "$tool" "yes" "$dest" "ready-for-manual-paste"
+    else
+      printf '%-12s %-11s %-45s %s\n' "$tool" "yes" "$dest" "paste-text-drifted"
+      needs_sync=1
+    fi
+    continue
+  fi
+
+  if [[ ! -f "$dest_expanded" ]]; then
+    printf '%-12s %-11s %-45s %s\n' "$tool" "yes" "$dest_expanded" "missing"
+    needs_sync=1
+    continue
+  fi
+
+  # A file with broken markers is reported, not allowed to end the whole report.
+  if ! expected=$(render_for_mode "$mode" "$dest_expanded" "$core_content" 2>/dev/null); then
+    printf '%-12s %-11s %-45s %s\n' "$tool" "yes" "$dest_expanded" "markers-broken: fix by hand"
+    needs_sync=1
+    continue
+  fi
+  if diff -q <(print -r -- "$expected") "$dest_expanded" >/dev/null 2>&1; then
+    printf '%-12s %-11s %-45s %s\n' "$tool" "yes" "$dest_expanded" "in-sync"
+  else
+    printf '%-12s %-11s %-45s %s\n' "$tool" "yes" "$dest_expanded" "drifted"
+    needs_sync=1
+  fi
+done < <(manifest_rows)
+
+echo
+printf '%-12s %-11s %-45s %s\n' "SKILLS" "COUNT" "DESTINATION" "STATUS"
+printf '%-12s %-11s %-45s %s\n' "------" "-----" "-----------" "------"
+
+repo_skill_count=$(skill_dirs | wc -l | tr -d ' ')
+while IFS=$'\t' read -r skill_label skill_detect skill_root; do
+  dest_expanded=$(expand_path "$skill_root")
+  if ! tool_detected "$skill_detect"; then
+    printf '%-12s %-11s %-45s %s\n' "$skill_label" "-" "$skill_root" "tool-absent"
+    continue
+  fi
+  if [[ ! -d "$dest_expanded" ]]; then
+    printf '%-12s %-11s %-45s %s\n' "$skill_label" "$repo_skill_count" "$dest_expanded" "missing: run scripts/deploy"
+    needs_sync=1
+    continue
+  fi
+  drifted=0 orphaned=0 absent=0
+  for skill_dir in ${(f)"$(skill_dirs)"}; do
+    name=$(basename "$skill_dir")
+    if [[ ! -d "$dest_expanded/$name" ]]; then
+      absent=$(( absent + 1 ))
+    elif ! skill_in_sync "$skill_dir" "$dest_expanded/$name"; then
+      drifted=$(( drifted + 1 ))
+    fi
+  done
+  # Orphans are only ever skills this repo deployed and later dropped. A skill
+  # from another source has no marker, is reported separately, and is not drift.
+  for existing in "$dest_expanded"/*/(N); do
+    managed_skill "${existing%/}" || continue
+    [[ -d "$REPO_ROOT/skills/$(basename "${existing%/}")" ]] || orphaned=$(( orphaned + 1 ))
+  done
+  if (( drifted || orphaned || absent )); then
+    skill_status="drifted:$drifted not-deployed:$absent orphaned:$orphaned"
+    needs_sync=1
+  else
+    skill_status="in-sync"
+  fi
+  printf '%-12s %-11s %-45s %s\n' "$skill_label" "$repo_skill_count" "$dest_expanded" "$skill_status"
+done < <(skill_dest_rows)
+for root in "${(@f)$(retired_skill_roots)}"; do
+  [[ -n "$root" ]] || continue
+  left=0
+  for existing in "$root"/*/(N); do managed_skill "${existing%/}" && left=$(( left + 1 )); done
+  printf '%-12s %-11s %-45s %s\n' "retired" "$left" "$root" "no longer in the manifest: run ./install to remove"
+  needs_sync=1
+done
+
+echo
+echo "SKILLS FROM OTHER SOURCES (not managed here; left untouched by deploy)"
+echo "----------------------------------------------------------------------"
+foreign_found=0
+while IFS=$'\t' read -r skill_label skill_detect skill_root; do
+  tool_detected "$skill_detect" || continue
+  root=$(expand_path "$skill_root")
+  for existing in "$root"/*/(N); do
+    fname=$(basename "${existing%/}")
+    managed_skill "${existing%/}" && continue
+    printf '  %-10s %-28s %s\n' "$skill_label" "$fname" "not managed here"
+    foreign_found=1
+  done
+done < <(skill_dest_rows)
+(( foreign_found )) || echo "  none"
+
+echo
+echo "HOOKS"
+echo "-----"
+"$SCRIPT_DIR/hooks" check || true
+
+echo
+if "$SCRIPT_DIR/skills" lint >/dev/null 2>&1; then
+  echo "skills lint: clean"
+else
+  echo "skills lint: FAILING; run 'scripts/skills lint' for details"
+fi
+
+if [[ -f "$REPO_ROOT/skills/CATALOG.md" ]] \
+  && diff -q <("$SCRIPT_DIR/skills" _render_catalog 2>/dev/null || true) "$REPO_ROOT/skills/CATALOG.md" >/dev/null 2>&1; then
+  echo "skills catalog: in-sync"
+else
+  echo "skills catalog: stale or missing; run 'scripts/skills catalog'"
+fi
+
+echo "tool paths last checked against vendor docs: $(awk -F': ' '/^# verified:/ {print $2; exit}' "$SKILL_MANIFEST")"
+
+echo
+if (( needs_sync )); then
+  echo "Run './install --dry-run' to preview fixes for drifted or missing entries."
+fi

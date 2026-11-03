@@ -1,0 +1,79 @@
+#!/usr/bin/env zsh
+# Deploy core/GLOBAL.md into every detected tool's native config location.
+# Usage: sync [--dry-run]
+
+set -euo pipefail
+source "$(dirname "${(%):-%x}")/lib.sh"
+
+DRY_RUN=0
+[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
+
+core_content=$(render_core)
+changed=0
+skipped=0
+seen_destinations=()
+
+while IFS=$'\t' read -r tool detect dest mode; do
+  if ! tool_detected "$detect"; then
+    log "skip  $tool (not detected)"
+    ((skipped++)) || true
+    continue
+  fi
+
+  dest_expanded=$(expand_path "$dest")
+
+  if [[ "$mode" == "manual" ]]; then
+    new_content="$core_content"
+    if [[ -f "$dest_expanded" ]] && diff -q <(print -r -- "$new_content") "$dest_expanded" >/dev/null 2>&1; then
+      log "ok    $tool: $dest (manual paste target, unchanged)"
+      continue
+    fi
+    if (( DRY_RUN )); then
+      log "would regenerate manual paste-text for $tool -> $dest"
+    else
+      atomic_write "$dest_expanded" "$new_content"
+      log "wrote $tool: $dest (paste into app UI manually)"
+    fi
+    ((changed++)) || true
+    continue
+  fi
+
+  # De-dup real filesystem writes when two tools share a destination
+  # (e.g. gemini + antigravity both target ~/.gemini/GEMINI.md).
+  if (( ${seen_destinations[(Ie)$dest_expanded]} )); then
+    log "ok    $tool: $dest_expanded (already synced this run via another tool)"
+    continue
+  fi
+
+  new_content=$(render_for_mode "$mode" "$dest_expanded" "$core_content")
+
+  if [[ -f "$dest_expanded" ]] && diff -q <(print -r -- "$new_content") "$dest_expanded" >/dev/null 2>&1; then
+    log "ok    $tool: $dest_expanded (in sync)"
+    seen_destinations+=("$dest_expanded")
+    continue
+  fi
+
+  if (( DRY_RUN )); then
+    log "--- diff for $dest_expanded ($tool, mode=$mode) ---"
+    if [[ -f "$dest_expanded" ]]; then
+      diff -u "$dest_expanded" <(print -r -- "$new_content") || true
+    else
+      log "(new file)"
+      print -r -- "$new_content"
+    fi
+    log "would write $dest_expanded"
+  else
+    backup_path "$dest_expanded" through
+    atomic_write "$dest_expanded" "$new_content"
+    log "wrote $tool: $dest_expanded"
+  fi
+  seen_destinations+=("$dest_expanded")
+  ((changed++)) || true
+done < <(manifest_rows)
+
+log ""
+if (( DRY_RUN )); then
+  log "dry run complete: $changed destination(s) would change, $skipped tool(s) skipped (not detected)"
+else
+  log "sync complete: $changed destination(s) changed, $skipped tool(s) skipped (not detected)"
+fi

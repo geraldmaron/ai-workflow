@@ -1,0 +1,65 @@
+#!/usr/bin/env zsh
+# Inspect a repository and produce/update its project-level instruction files
+# (AGENTS.md + a one-line CLAUDE.md import) without duplicating or overwriting
+# existing guidance.
+# Usage: project-init /path/to/repo [--dry-run]
+
+set -euo pipefail
+source "$(dirname "${(%):-%x}")/lib.sh"
+
+TARGET="${1:-}"
+[[ -z "$TARGET" ]] && die "usage: project-init /path/to/repo [--dry-run]"
+DRY_RUN=0
+[[ "${2:-}" == "--dry-run" ]] && DRY_RUN=1
+
+TARGET=$(cd "$TARGET" && pwd) || die "not a directory: $TARGET"
+[[ -d "$TARGET/.git" ]] || log "warning: $TARGET does not look like a git repo root"
+
+agents_md="$TARGET/AGENTS.md"
+claude_md="$TARGET/CLAUDE.md"
+
+existing_instruction_files=()
+for f in AGENTS.md CLAUDE.md GEMINI.md .github/copilot-instructions.md .cursor/rules; do
+  [[ -e "$TARGET/$f" ]] && existing_instruction_files+=("$f")
+done
+
+log "== project-init: $TARGET =="
+if (( ${#existing_instruction_files[@]} )); then
+  log "existing instruction files found (will NOT be overwritten):"
+  for f in "${existing_instruction_files[@]}"; do log "  - $f"; done
+else
+  log "no existing instruction files found."
+fi
+
+if [[ -f "$agents_md" ]]; then
+  log "AGENTS.md already exists at repo root. Leaving it as-is."
+  log "Review it by hand and merge in project-specific notes from templates/project/AGENTS.md if useful."
+else
+  if (( DRY_RUN )); then
+    log "would create $agents_md from templates/project/AGENTS.md"
+  else
+    cp "$REPO_ROOT/templates/project/AGENTS.md" "$agents_md"
+    log "created $agents_md (skeleton; fill in build/test commands, architecture, conventions, CI)"
+  fi
+fi
+
+if [[ -f "$claude_md" ]]; then
+  content=$(<"$claude_md")
+  if [[ "$content" == "@AGENTS.md" ]]; then
+    log "CLAUDE.md already imports AGENTS.md. No change needed."
+  else
+    log "CLAUDE.md exists with other content. Leaving it as-is (not overwriting)."
+    log "Consider adding a line '@AGENTS.md' by hand if you want it to inherit the shared file."
+  fi
+else
+  if (( DRY_RUN )); then
+    log "would create $claude_md with '@AGENTS.md' import"
+  else
+    cp "$REPO_ROOT/templates/project/CLAUDE.md" "$claude_md"
+    log "created $claude_md (imports AGENTS.md)"
+  fi
+fi
+
+log ""
+log "Nothing was deleted or overwritten. Fill in $agents_md with real project details by hand."
+log "This script never commits automatically."

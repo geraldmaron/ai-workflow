@@ -1,0 +1,6 @@
+git status --short && git ls-files | head -100 && grep -rniE "sticker|0\.29|0\.28|price" --exclude-dir=.git . | head -50
+for f in money.js cart.js invoice.js test/money.test.js package.json; do echo "== $f"; cat -n $f; done
+cat -n money.js && echo ==== && cat -n cart.js && echo ==== && cat -n invoice.js && echo ==== && cat -n test/money.test.js && echo ==== && cat -n package.json
+cat -n cart.js; echo ----; cat -n invoice.js; echo ----; cat -n test/money.test.js; echo ----; cat -n package.json
+npm test 2>&1 | tail -20
+npm test 2>&1 | tail -12 && node -e "const {cartLine}=require('./cart');console.log(cartLine({name:'Sticker',price:0.29,qty:1}))"

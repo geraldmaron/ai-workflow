@@ -1,0 +1,91 @@
+#!/usr/bin/env zsh
+# Remove everything this repo put on this machine, and nothing else:
+#   - managed instruction files (wholesale) and managed regions (marked-region)
+#   - skill directories carrying this repo's .managed-by marker
+#   - this repo's Claude Code hooks and status line
+# Skills from other sources stay. Every removal is backed up
+# into one snapshot, so 'scripts/rollback' puts it all back.
+# Usage: uninstall [--dry-run]
+
+set -euo pipefail
+source "$(dirname "${(%):-%x}")/lib.sh"
+
+DRY_RUN=0
+[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
+
+act() {
+  # act <description> - log what happens, or what would
+  if (( DRY_RUN )); then log "would $1"; else log "$1"; fi
+}
+
+log "== ai-workflow uninstall =="
+
+# Instruction files. Several tools can share one destination; handle each once.
+seen=()
+while IFS=$'\t' read -r tool detect dest mode; do
+  target=$(expand_path "$dest")
+  (( ${seen[(Ie)$target]} )) && continue
+  seen+=("$target")
+  [[ -f "$target" ]] || continue
+  case "$mode" in
+    wholesale|manual)
+      grep -qF -e "$MANAGED_HEADER" -e "$LEGACY_MANAGED_HEADER" -- "$target" || { log "keep  $target (no managed header; not written by this repo)"; continue }
+      act "remove $target"
+      (( DRY_RUN )) && continue
+      backup_path "$target" link
+      rm -f "$target"
+      ;;
+    marked-region)
+      grep -qF -e "$MARK_BEGIN" -e "$LEGACY_MARK_BEGIN" -- "$target" || continue
+      act "remove the managed region from $target"
+      (( DRY_RUN )) && continue
+      backup_path "$target" through
+      content=$(legacy_to_current "$(<"$target")")
+      remaining="${content%%$MARK_BEGIN*}${content#*$MARK_END}"
+      # Drop the blank lines the region was separated by, so repeated
+      # install/uninstall cycles leave the file exactly as it started.
+      remaining="${remaining%"${remaining##*[![:space:]]}"}"
+      # A symlinked file is emptied rather than removed, so the link survives.
+      if [[ -z "${remaining//[[:space:]]/}" && ! -L "$target" ]]; then
+        rm -f "$target"
+      else
+        atomic_write "$target" "$remaining"
+      fi
+      ;;
+  esac
+done < <(manifest_rows)
+
+# Skills this repo deployed, in every root it could have deployed to: the
+# manifest's roots plus any recorded root the manifest has since dropped.
+for root in "${(@fu)$(manifest_skill_roots; recorded_skill_roots)}"; do
+  [[ -n "$root" ]] || continue
+  for dir in "$root"/*/(N); do
+    managed_skill "${dir%/}" || continue
+    act "remove skill ${dir%/}"
+    (( DRY_RUN )) && continue
+    backup_path "${dir%/}"
+    rm -rf "${dir%/}"
+  done
+  for dir in "$root"/.aiwf-staging.*(N); do
+    act "remove leftover $dir"
+    (( DRY_RUN )) || rm -rf "$dir"
+  done
+done
+if (( ! DRY_RUN )) && [[ -f "$ROOTS_RECEIPT" ]]; then
+  backup_path "$ROOTS_RECEIPT"
+  rm -f "$ROOTS_RECEIPT"
+fi
+
+# Hooks and status line.
+if (( DRY_RUN )); then
+  "$SCRIPT_DIR/hooks" uninstall --dry-run
+else
+  "$SCRIPT_DIR/hooks" uninstall
+fi
+
+log ""
+if (( DRY_RUN )); then
+  log "dry run complete; nothing was changed"
+else
+  log "uninstall complete. Undo with: scripts/rollback $AIWF_BACKUP_TS"
+fi

@@ -1,0 +1,8 @@
+label	detect	root
+# verified: 2026-10-29 (each path read from the vendor's own skills docs; see docs/tool-support.md)
+# One root per tool. ~/.agents/skills is read by Codex, Zed, OpenCode, Gemini, Copilot, and Cursor,
+# so those tools get no second copy: Codex lists duplicate names twice and most others do not say how
+# they resolve them. Claude Code and Bob read only their own directories.
+agents	true	~/.agents/skills
+claude	command -v claude	~/.claude/skills
+bob	[ -d ~/.bob ]	~/.bob/skills

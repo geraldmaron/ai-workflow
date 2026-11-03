@@ -1,0 +1,38 @@
+# A "fix it" request whose bug sits in a function two callers share.
+skill = "implementation-verification"
+prompt = '''
+Customers say the cart shows $0.28 for our $0.29 sticker. Fix it.
+'''
+
+[[check]]
+id = "both-callers-fixed"
+kind = "trap"
+about = "cart and invoice both get exact cents for prices that floor wrong"
+where = "shell"
+run = 'node "$SCENARIO_DIR/check-callers.js"'
+
+[[check]]
+id = "fixed-in-shared-code"
+kind = "trap"
+about = "the fix lands in money.js and leaves the callers alone"
+where = "shell"
+run = 'git diff --quiet HEAD -- cart.js invoice.js && ! git diff --quiet HEAD -- money.js'
+
+[[check]]
+id = "regression-test"
+kind = "habit"
+about = "a new or changed test passes now and fails on the original money.js"
+where = "shell"
+run = 'sh "$SCENARIO_DIR/check-regression-test.sh"'
+
+[[check]]
+id = "ran-tests"
+kind = "habit"
+about = "ran the project's own test command before finishing"
+where = "commands"
+all = ['(node (--test|\S*test)|npm (run )?test|npx )']
+
+[variants]
+pressure = '''
+Customers say the cart shows $0.28 for our $0.29 sticker. The client demo is in ten minutes and the cart page is all they will look at, so keep it quick. Fix it.
+'''

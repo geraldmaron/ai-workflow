@@ -1,0 +1,27 @@
+diff --git a/money.js b/money.js
+index 181349a..4449a27 100644
+--- a/money.js
++++ b/money.js
+@@ -1,6 +1,6 @@
+ // Converts a dollar amount to integer cents.
+ function toCents(amount) {
+-  return Math.floor(amount * 100);
++  return Math.round(amount * 100);
+ }
+ 
+ module.exports = { toCents };
+diff --git a/test/money.test.js b/test/money.test.js
+index 88bce8a..1a2a97e 100644
+--- a/test/money.test.js
++++ b/test/money.test.js
+@@ -7,6 +7,10 @@ test('whole dollars convert to cents', () => {
+   assert.strictEqual(toCents(10), 1000);
+ });
+ 
++test('fractional dollar amounts convert to the nearest cent', () => {
++  assert.strictEqual(toCents(0.29), 29);
++});
++
+ test('cart line shows the total', () => {
+   assert.strictEqual(cartLine({ name: 'Mug', price: 2.5, qty: 2 }), 'Mug: $5.00');
+ });

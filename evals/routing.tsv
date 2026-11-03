@@ -1,0 +1,59 @@
+expected	request
+artifact-quality	The board deck goes out tomorrow; check the charts match the numbers and the layout holds up before I send it
+artifact-quality	Finalize this PDF report for the client, make sure captions, numbering, and the table of contents are right
+artifact-quality	Before this quarterly report is shared, walk every page and confirm the diagrams depict what the data says
+commit-and-pr	Commit these changes and open a pull request for the team to review
+commit-and-pr	Write the commit message for what I have staged and push it to a new branch
+commit-and-pr	Open a PR for this fix with a description a reviewer who hasn't seen it can follow
+customer-discovery	Plan a round of interviews with churned customers to find out why they left
+customer-discovery	I have notes from twelve user interviews; turn them into findings the team will fund
+customer-discovery	We want to validate this problem with users before we build anything; how should we run the interviews?
+impact-measurement	Help me write my self-review for promotion with evidence my manager's committee will believe
+impact-measurement	Reconstruct what I actually delivered last quarter for my calibration packet; I kept no log
+impact-measurement	Turn the migration I led into a board-update line with the before and after numbers
+implementation-verification	Add rate limiting to the signup endpoint in this repo
+implementation-verification	Refactor the payment module to use the new client and make sure nothing breaks
+implementation-verification	Is this feature done? I changed the schema and the API handler
+knowledge-base-curation	Go through my notes vault and propose where the stray and untitled files should go
+knowledge-base-curation	Do the monthly cleanup pass on my knowledge base and flag notes that have gone stale
+knowledge-base-curation	My notes inbox is a mess of untitled pages; suggest moves I can check off
+launch-readiness	We are shipping the new billing flow to all customers next week; what has to be ready?
+launch-readiness	Write the go/no-go criteria for the GA launch and say who makes the call
+launch-readiness	Plan the rollout for this feature with a kill switch and a staged exposure
+metric-design	Pick a North Star metric for our onboarding product and the inputs under it
+metric-design	These key results are all deliverables; rewrite them as results we can measure
+metric-design	Define what counts as an active user so the dashboard stops arguing with finance
+org-entry	I start as head of product at a new company in two weeks; draft my first 90 days
+org-entry	I just inherited a team and roadmap after a reorg; how do I figure out what kind of situation this is?
+org-entry	New leadership role, the team is struggling; build a 30/60/90 plan
+research	Why was this service built with two databases? Nobody on the team knows and there is no doc
+research	Find out who actually owns the export pipeline and where that was decided
+research	Dig through old tickets and threads to find out why the Europe project was cancelled
+product-strategy	Our product strategy doc is just a list of initiatives; rewrite it as a real strategy
+product-strategy	Leadership wants our strategy for next year; help me pick where to play and what we won't do
+product-strategy	Review this strategy deck I inherited and tell me whether it is a strategy at all
+root-cause-debugging	The integration tests started failing after yesterday's merge and I can't tell why
+root-cause-debugging	Signups dropped 30 percent on Tuesday and nobody knows the cause
+root-cause-debugging	It works locally but crashes in staging with a null pointer error
+adversarial-review	Poke holes in this architecture proposal before we commit to it
+decision-framing	Should we build our own auth or buy a vendor? Lay out the options and recommend one
+intake	Here are five messages from the client saying different things; what do they actually want?
+research	A competitor claims 40 percent market share; check whether that is true from primary sources
+requirements-structuring	We agree on the feature; write requirements an engineer could build and test from
+written-voice	Make this announcement sound less like a robot wrote it
+context-mapping	I just inherited this codebase; map what depends on what before I touch anything
+none	What does the ls -la flag do?
+none	Rename this variable from x to userCount
+none	Convert this JSON to YAML
+none	What time zone is Tokyo in?
+none	Explain what a closure is in JavaScript
+research	Which user-level directories does Codex CLI read skills from? Check the official docs
+research	Compare the three main options for running Postgres migrations in CI and summarize what the docs recommend today
+research	Is the advice in this 2024 blog post about Node fetch timeouts still current?
+research	Find out how OAuth device flow works and give me a short sourced summary
+research	The vendor says their uptime was 99.99 percent last year; verify that against primary records
+decision-framing	We have the research on both auth vendors; now help us pick one and write down why
+implementation-planning	Write me an implementation plan for adding per-user rate limiting to our Express API
+implementation-planning	How would you break this migration into tasks before we start coding?
+implementation-verification	Customers say the cart shows the wrong price. Fix it.
+product-strategy	Which market should we bet on next year, and what do we stop doing?

@@ -1,0 +1,10 @@
+tool	detect	destination	mode
+codex	command -v codex	~/.codex/AGENTS.md	wholesale
+opencode	command -v opencode	~/.config/opencode/AGENTS.md	wholesale
+claude	command -v claude	~/.claude/CLAUDE.md	marked-region
+gemini	command -v gemini	~/.gemini/GEMINI.md	marked-region
+antigravity	[ -d /Applications/Antigravity.app ] || command -v antigravity	~/.gemini/GEMINI.md	marked-region
+copilot	command -v copilot	~/.copilot/instructions/ai-workflow.instructions.md	wholesale
+zed	[ -d ~/.config/zed ] || [ -d /Applications/Zed.app ]	~/.config/zed/AGENTS.md	wholesale
+bob	[ -d ~/.bob ]	~/.bob/rules/ai-workflow.md	wholesale
+cursor	[ -d ~/.cursor ] || [ -d /Applications/Cursor.app ] || command -v cursor	local/cursor-user-rules.md	manual

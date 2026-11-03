@@ -1,0 +1,78 @@
+# Sequencing known work, owned by implementation-planning.
+skill = "implementation-planning"
+prompt = '''
+Write me an implementation plan for adding per-user rate limiting to our API: 100 requests per minute per user, then reject. It's Express on Node, three instances behind a load balancer, and Postgres is our only datastore. I want the plan, not the code.
+'''
+
+[[check]]
+id = "per-instance-memory-trap"
+kind = "trap"
+about = "the counter is shared by all three instances, not held in each process (which allows up to 300/min)"
+where = "answer"
+near = 300
+# shortcut: proximity cannot read negation, so "keep the memory store on all three instances" also passes; move to a judge model if a live answer does that.
+all = ['(in[- ]memory|in[- ]process|process memory|per[- ]instance|memorystore|local (counter|memory)|each instance|instance[- ]local|shared ([\w-]+ )?(source|counter|limiter|authority|state|quota)|share one)', '(three|3 instances|300|multipl|triple|(across|all) (the )?(three |3 )?(express |node |api )?instances)']
+
+[[check]]
+id = "atomic-counter"
+kind = "trap"
+about = "read-then-write counting races under concurrency; needs an atomic upsert or lock"
+where = "answer"
+all = ['(atomic|on conflict|upsert|for update|race)']
+
+[[check]]
+id = "postgres-down-behavior"
+kind = "trap"
+about = "decides fail-open or fail-closed when the limiter's store is unavailable"
+where = "answer"
+all = ['(fail[- ]?(open|closed)|(postgres(ql)?|database|db) (is )?(down|unavailable|slow|outage)|limiter (store )?(is )?unavailable)']
+
+[[check]]
+id = "row-cleanup"
+kind = "habit"
+about = "old window rows are expired or pruned so the table does not grow forever"
+where = "answer"
+all = ['(clean ?up|purge|prune|delete (old|expired|stale)|rows? (are |is )?(deleted|removed|pruned)|expire|ttl|partition|vacuum)']
+
+[[check]]
+id = "429-retry-after"
+kind = "habit"
+about = "rejects with 429 and a Retry-After header"
+where = "answer"
+near = 300
+all = ['429', 'retry-after']
+
+[[check]]
+id = "ordered-steps"
+kind = "habit"
+about = "the plan is sequenced, not a bag of considerations"
+where = "answer"
+all = ['(?m)^\s*(#+\s*)?(\*\*)?(step|phase|task)?\s*1[.):]']
+
+# Shape: what a plan owes its reader beyond catching the traps.
+[[check]]
+id = "scope-boundary"
+kind = "shape"
+about = "says what the plan deliberately leaves out"
+where = "answer"
+all = ['(out of scope|non-goals?|not in scope|not covered|won.t (do|cover|include|build)|deferred|left out|excluded)']
+
+[[check]]
+id = "questions-before-tasks"
+kind = "shape"
+about = "decisions the user must make, which would change the plan, come before the tasks"
+where = "answer"
+all = ['(?ims)(decide first|open questions?|questions? (for you|to settle|before)|need(s)? (your|a) (decision|answer)|you (need to|should|must) decide|decide before|confirm before|decisions? (needed|for you|to make)).*?^(\W*(\*\*)?(task|step|phase|milestone)\s*1\b|#+\s*(\*\*)?1[.):]\s)']
+
+[[check]]
+id = "done-check-per-task"
+kind = "shape"
+about = "each task carries its own check, not one testing section at the end"
+where = "answer"
+per = '(?m)^\W*(\*\*)?task\s*\d+\s*[:.]'
+all = ['(?m)^\s*[-*]?\s*(\*\*|_)?(done when|verify|verified by|check|proof|proved by|test)(\*\*|_)?\s*[:,]']
+
+[variants]
+pressure = '''
+I need an implementation plan for per-user rate limiting on our API by end of day: 100 requests per minute per user, then reject. Express on Node, three instances behind a load balancer, Postgres is our only datastore. I'm leaning toward a simple in-memory counter in each process so we don't touch the database; keep the plan short. Plan, not code.
+'''
